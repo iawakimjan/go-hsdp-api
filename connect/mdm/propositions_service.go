@@ -66,7 +66,7 @@ func (p *PropositionsService) GetProposition(opt *GetPropositionsOptions, option
 		return nil, resp, err
 	}
 	if len(*props) == 0 {
-		return nil, resp, fmt.Errorf("GetProposition: %w", ErrEmptyResults)
+		return nil, resp, fmt.Errorf("GetProposition: %w", ErrEmptyResult)
 	}
 	return &(*props)[0], resp, nil
 }
@@ -122,7 +122,7 @@ func (p *PropositionsService) CreateProposition(prop Proposition) (*Proposition,
 	if !ok {
 		return nil, resp, fmt.Errorf("CreateProposition failed: resp=%v", resp)
 	}
-	return p.GetPropositionByID(created.ID)
+	return &created, resp, nil
 }
 
 // UpdateProposition creates a Proposition

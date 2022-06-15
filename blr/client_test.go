@@ -1,17 +1,14 @@
-package cdr_test
+package blr_test
 
 import (
 	"io"
-	"io/ioutil"
+	_ "io/ioutil"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	_ "os"
 	"testing"
 
-	"github.com/google/fhir/go/jsonformat"
-
-	"github.com/philips-software/go-hsdp-api/cdr"
-
+	"github.com/philips-software/go-hsdp-api/blr"
 	"github.com/philips-software/go-hsdp-api/iam"
 	"github.com/stretchr/testify/assert"
 )
@@ -19,27 +16,18 @@ import (
 var (
 	muxIAM    *http.ServeMux
 	serverIAM *httptest.Server
-	muxIDM    *http.ServeMux
-	serverIDM *httptest.Server
-	muxCDR    *http.ServeMux
-	serverCDR *httptest.Server
+	muxBLR    *http.ServeMux
+	serverBLR *httptest.Server
 
 	iamClient *iam.Client
-	cdrClient *cdr.Client
-	cdrOrgID  = "48a0183d-a588-41c2-9979-737d15e9e860"
-	userUUID  = "e7fecbb2-af8c-47c9-a662-5b046e048bc5"
-	timeZone  = "Europe/Amsterdam"
-	ma        *jsonformat.Marshaller
-	um        *jsonformat.Unmarshaller
+	blrClient *blr.Client
 )
 
-func setup(t *testing.T, version jsonformat.Version) func() {
+func setup(t *testing.T) func() {
 	muxIAM = http.NewServeMux()
 	serverIAM = httptest.NewServer(muxIAM)
-	muxIDM = http.NewServeMux()
-	serverIDM = httptest.NewServer(muxIDM)
-	muxCDR = http.NewServeMux()
-	serverCDR = httptest.NewServer(muxCDR)
+	muxBLR = http.NewServeMux()
+	serverBLR = httptest.NewServer(muxBLR)
 
 	var err error
 
@@ -49,12 +37,21 @@ func setup(t *testing.T, version jsonformat.Version) func() {
 		SharedKey:      "SharedKey",
 		SecretKey:      "SecretKey",
 		IAMURL:         serverIAM.URL,
-		IDMURL:         serverIDM.URL,
+		IDMURL:         serverBLR.URL,
 	})
 	if err != nil {
-		t.Fatalf("Failed to create iamCleitn: %v", err)
+		t.Fatalf("Failed to create iamClient: %v", err)
 	}
+	blrClient, err = blr.NewClient(iamClient, &blr.Config{
+		BaseURL: serverBLR.URL + "/connect/blobrepository",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create mdmClient: %v", err)
+	}
+
 	token := "44d20214-7879-4e35-923d-f9d4e01c9746"
+	userUUID := "33d20214-7879-4e35-923d-f9d4e01c9746"
+	managingOrgID := "22d20214-7879-4e35-923d-f9d4e01c9746"
 
 	muxIAM.HandleFunc("/authorize/oauth2/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -66,7 +63,7 @@ func setup(t *testing.T, version jsonformat.Version) func() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{
-    "scope": "mail tdr.contract tdr.dataitem",
+    "scope": "mail ?.?.dsc.service.readAny",
     "access_token": "`+token+`",
     "refresh_token": "31f1a449-ef8e-4bfc-a227-4f2353fde547",
     "expires_in": 1799,
@@ -87,12 +84,12 @@ func setup(t *testing.T, version jsonformat.Version) func() {
   "username": "ronswanson",
   "exp": 1592073485,
   "sub": "`+userUUID+`",
-  "iss": "https://iam-client-test.us-east.philips-healthsuite.com/oauth2/access_token",
+  "iss": "https://iam-Client-test.us-east.philips-healthsuite.com/oauth2/access_token",
   "organizations": {
-    "managingOrganization": "`+cdrOrgID+`",
+    "managingOrganization": "`+managingOrgID+`",
     "organizationList": [
       {
-        "organizationId": "`+cdrOrgID+`",
+        "organizationId": "`+managingOrgID+`",
         "permissions": [
           "USER.READ",
           "GROUP.WRITE",
@@ -103,12 +100,12 @@ func setup(t *testing.T, version jsonformat.Version) func() {
           "PKI_CERT.ISSUE",
           "PKI_CERT.READ",
           "PKI_CERTS.LIST",
-          "PKI_CERTROLE.LIST",
-          "PKI_CERTROLE.READ",
-          "PKI_URLS.READ",
-          "PKI_CRL.ROTATE",
-          "PKI_CRL.CONFIGURE",
-          "PKI_CERT.SIGN",
+ 		  "PKI_CERTROLE.LIST",
+   		  "PKI_CERTROLE.READ",
+  		  "PKI_URLS.READ",
+		  "PKI_CRL.ROTATE",
+   		  "PKI_CRL.CONFIGURE",
+	      "PKI_CERT.SIGN",
           "PKI_CERT.REVOKE",
           "PKI_URLS.CONFIGURE"
         ],
@@ -129,36 +126,18 @@ func setup(t *testing.T, version jsonformat.Version) func() {
 }`)
 	})
 
-	// Login immediately so we can create cdrClient
+	// Login immediately so we can create tdrClient
 	err = iamClient.Login("username", "password")
 	assert.Nil(t, err)
 
-	cdrClient, err = cdr.NewClient(iamClient, &cdr.Config{
-		CDRURL:    serverCDR.URL + "/store/fhir",
-		RootOrgID: cdrOrgID,
-		TimeZone:  timeZone,
-	})
-	if !assert.Nil(t, err) {
-		t.Fatalf("invalid client")
-	}
-	ma, err = jsonformat.NewMarshaller(false, "", "", version)
-	if !assert.Nil(t, err) {
-		t.Fatalf("failed to create marshaller")
-	}
-	um, err = jsonformat.NewUnmarshaller("Europe/Amsterdam", version)
-	if !assert.Nil(t, err) {
-		t.Fatalf("failed to create unmarshaller")
-	}
-
 	return func() {
 		serverIAM.Close()
-		serverIDM.Close()
-		serverCDR.Close()
+		serverBLR.Close()
 	}
 }
 
 func TestLogin(t *testing.T) {
-	teardown := setup(t, jsonformat.STU3)
+	teardown := setup(t)
 	defer teardown()
 
 	token := "44d20214-7879-4e35-923d-f9d4e01c9746"
@@ -174,59 +153,23 @@ func TestLogin(t *testing.T) {
 	assert.Equal(t, token, accessToken)
 }
 
+/*
 func TestDebug(t *testing.T) {
-	teardown := setup(t, jsonformat.STU3)
+	teardown := setup(t)
 	defer teardown()
 
-	tmpfile, err := ioutil.TempFile("", "example")
+	tempFile, err := ioutil.TempFile("", "example")
 	if err != nil {
 		t.Fatalf("Error: %v", err)
 	}
 
-	cdrClient, err = cdr.NewClient(iamClient, &cdr.Config{
-		CDRURL:   serverCDR.URL,
-		DebugLog: tmpfile.Name(),
-	})
-	if !assert.Nil(t, err) {
-		return
-	}
-
-	defer cdrClient.Close()
 	defer func() {
-		_ = os.Remove(tmpfile.Name())
+		_ = os.Remove(tempFile.Name())
 	}() // clean up
 
 	err = iamClient.Login("username", "password")
 	if !assert.Nil(t, err) {
 		return
 	}
-
-	fi, err := tmpfile.Stat()
-	assert.Nil(t, err)
-	assert.NotEqual(t, 0, fi.Size(), "Expected something to be written to DebugLog")
 }
-
-func TestEndpoints(t *testing.T) {
-	teardown := setup(t, jsonformat.STU3)
-	defer teardown()
-
-	rootOrgID := "foo"
-
-	cdrClient, err := cdr.NewClient(iamClient, &cdr.Config{
-		CDRURL:    serverCDR.URL + "/store/fhir",
-		RootOrgID: rootOrgID,
-	})
-	if !assert.Nil(t, err) {
-		return
-	}
-	if !assert.NotNil(t, cdrClient) {
-		return
-	}
-	endpoint := cdrClient.GetEndpointURL()
-	assert.Equal(t, serverCDR.URL+"/store/fhir/", cdrClient.GetFHIRStoreURL())
-	assert.Equal(t, serverCDR.URL+"/store/fhir/"+rootOrgID, endpoint)
-
-	assert.Nil(t, cdrClient.SetEndpointURL(endpoint))
-	assert.Equal(t, serverCDR.URL+"/store/fhir/"+rootOrgID, cdrClient.GetEndpointURL())
-
-}
+*/
